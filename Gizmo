@@ -1,43 +1,63 @@
--- Gizmo.lua (fixed Synapse Drawing API 3D Visualizer)
+-- Gizmo.lua
+
 local RunService = game:GetService("RunService")
 local Camera = workspace.CurrentCamera
 
 local Gizmo = {}
-local drawings = {}
-local recycle = {}
+local active = {}
+local pool = {}
 
--- helper
-local function newDrawing(type)
+--////////////////////////////////////////////////////
+-- Internal: Get or reuse Drawing object
+--////////////////////////////////////////////////////
+local function getDrawing(type)
 	local obj
-	if #recycle > 0 then
-		obj = table.remove(recycle)
+	if #pool > 0 then
+		obj = table.remove(pool)
 		obj.Visible = true
 	else
 		obj = Drawing.new(type)
 	end
 	obj.ZIndex = 2
-	table.insert(drawings, obj)
+	table.insert(active, obj)
 	return obj
 end
 
-function Gizmo.clear()
-	for _, d in ipairs(drawings) do
-		d.Visible = false
-		table.insert(recycle, d)
+--////////////////////////////////////////////////////
+-- Reset visibility (we’ll hide unused each frame)
+--////////////////////////////////////////////////////
+function Gizmo.beginFrame()
+	for _, d in ipairs(active) do
+		d._used = false
 	end
-	table.clear(drawings)
 end
 
+function Gizmo.endFrame()
+	for i = #active, 1, -1 do
+		local d = active[i]
+		if not d._used then
+			d.Visible = false
+			table.insert(pool, d)
+			table.remove(active, i)
+		end
+	end
+end
+
+--////////////////////////////////////////////////////
+-- Drawing functions
+--////////////////////////////////////////////////////
 function Gizmo.drawLine(a, b, color, thickness)
 	local a2d, aVisible = Camera:WorldToViewportPoint(a)
 	local b2d, bVisible = Camera:WorldToViewportPoint(b)
 	if not (aVisible or bVisible) then return end
 
-	local line = newDrawing("Line")
+	local line = getDrawing("Line")
 	line.Color = color or Color3.new(1, 1, 1)
 	line.Thickness = thickness or 2
 	line.From = Vector2.new(a2d.X, a2d.Y)
 	line.To = Vector2.new(b2d.X, b2d.Y)
+	line.Visible = true
+	line._used = true
 	return line
 end
 
@@ -45,11 +65,13 @@ function Gizmo.drawPoint(pos, color, size)
 	local p2d, visible = Camera:WorldToViewportPoint(pos)
 	if not visible then return end
 
-	local circle = newDrawing("Circle")
+	local circle = getDrawing("Circle")
 	circle.Color = color or Color3.new(1, 0, 0)
 	circle.Radius = size or 4
 	circle.Filled = true
 	circle.Position = Vector2.new(p2d.X, p2d.Y)
+	circle.Visible = true
+	circle._used = true
 	return circle
 end
 
@@ -57,13 +79,15 @@ function Gizmo.drawText(pos, text, color, size)
 	local p2d, visible = Camera:WorldToViewportPoint(pos)
 	if not visible then return end
 
-	local t = newDrawing("Text")
+	local t = getDrawing("Text")
 	t.Color = color or Color3.new(1, 1, 1)
 	t.Size = size or 16
 	t.Center = true
 	t.Outline = true
 	t.Text = tostring(text)
 	t.Position = Vector2.new(p2d.X, p2d.Y)
+	t.Visible = true
+	t._used = true
 	return t
 end
 
@@ -93,3 +117,4 @@ function Gizmo.drawBox(cf, size, color)
 end
 
 return Gizmo
+

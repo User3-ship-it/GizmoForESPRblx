@@ -1,5 +1,6 @@
--- Synapse Drawing API Gizmo (no attributes, no adornments)
--- Works in 3D via Camera:WorldToViewportPoint projection
+-- Synapse Drawing API Gizmo (3D Visualizer)
+-- Automatically clears & redraws each frame
+-- Works in 3D using Camera:WorldToViewportPoint
 
 local RunService = game:GetService("RunService")
 local Camera = workspace.CurrentCamera
@@ -7,6 +8,10 @@ local Camera = workspace.CurrentCamera
 local Gizmo = {}
 local drawings = {}
 local recycle = {}
+
+--============================================================
+-- Internal helpers
+--============================================================
 
 local function newDrawing(type)
 	local obj
@@ -28,6 +33,10 @@ function Gizmo.clear()
 	end
 	table.clear(drawings)
 end
+
+--============================================================
+-- Drawing Functions
+--============================================================
 
 function Gizmo.drawLine(a, b, color, thickness)
 	local a2d, aVisible = Camera:WorldToViewportPoint(a)
@@ -88,6 +97,9 @@ function Gizmo.drawBox(cf, size, color)
 	for _, e in ipairs(edges) do
 		Gizmo.drawLine(corners[e[1]], corners[e[2]], color or Color3.new(1,1,0))
 	end
+	for _, c in ipairs(corners) do
+		Gizmo.drawPoint(c, Color3.new(1, 0, 0))
+	end
 end
 
 function Gizmo.drawArrow(a, b, color)
@@ -100,7 +112,9 @@ function Gizmo.drawArrow(a, b, color)
 	Gizmo.drawLine(b, tip2, color)
 end
 
--- automatic clear on RenderStepped for persistent updates
+--============================================================
+-- Automatic clear per frame
+--============================================================
 RunService.RenderStepped:Connect(function()
 	Gizmo.clear()
 end)

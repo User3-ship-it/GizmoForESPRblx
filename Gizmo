@@ -1,7 +1,7 @@
--- Gizmo.lua
+-- Gizmo.lua (fixed)
 
 local RunService = game:GetService("RunService")
-local Camera = workspace.CurrentCamera
+local Camera = workspace:WaitForChild("CurrentCamera")
 
 local Gizmo = {}
 local active, pool = {}, {}
@@ -44,12 +44,11 @@ end
 -- Core Utilities
 --////////////////////////////////////////////////////
 local function to2D(pos)
-	local p, vis = Camera:WorldToViewportPoint(pos)
-	return Vector2.new(p.X, p.Y), vis
-end
-
-local function mid(a, b)
-	return (a + b) * 0.5
+	local v, onScreen = Camera:WorldToViewportPoint(pos)
+	if not onScreen or v.Z < 0 then
+		return nil, false
+	end
+	return Vector2.new(v.X, v.Y), true
 end
 
 --////////////////////////////////////////////////////
@@ -63,18 +62,16 @@ function Gizmo.drawPoint(pos, color, size)
 	c.Radius = size or 4
 	c.Filled = true
 	c.Position = p2d
-	c._used = true
 end
 
 function Gizmo.drawLine(a, b, color, thickness)
 	local a2d, av = to2D(a)
 	local b2d, bv = to2D(b)
-	if not (av or bv) then return end
+	if not (av and bv) then return end
 	local l = getDrawing("Line")
 	l.Color = color or Color3.new(1, 1, 1)
 	l.Thickness = thickness or 2
 	l.From, l.To = a2d, b2d
-	l._used = true
 end
 
 function Gizmo.drawText(pos, text, color, size)
@@ -87,7 +84,6 @@ function Gizmo.drawText(pos, text, color, size)
 	t.Center = true
 	t.Outline = true
 	t.Position = Vector2.new(math.floor(p2d.X), math.floor(p2d.Y))
-	t._used = true
 end
 
 --////////////////////////////////////////////////////
@@ -115,34 +111,6 @@ function Gizmo.drawBox(cf, size, color)
 	end
 end
 
-function Gizmo.drawWireBox(cf, size, color)
-	Gizmo.drawBox(cf, size, color or Color3.new(0,1,1))
-end
-
---////////////////////////////////////////////////////
--- Sphere (approx via circles)
---////////////////////////////////////////////////////
-function Gizmo.drawSphere(cf, radius, color)
-	local segments = 16
-	for i = 0, segments-1 do
-		local angle = (i/segments)*math.pi*2
-		local x = math.cos(angle)*radius
-		local z = math.sin(angle)*radius
-		Gizmo.drawPoint(cf.Position + cf.RightVector * x + cf.LookVector * z, color or Color3.new(1,0,1), 2)
-	end
-end
-
-function Gizmo.drawWireSphere(cf, radius, color)
-	local segments = 16
-	for i = 0, segments-1 do
-		local a = (i/segments)*math.pi*2
-		local b = ((i+1)/segments)*math.pi*2
-		local x1, z1 = math.cos(a)*radius, math.sin(a)*radius
-		local x2, z2 = math.cos(b)*radius, math.sin(b)*radius
-		Gizmo.drawLine(cf.Position + cf.RightVector*x1 + cf.LookVector*z1, cf.Position + cf.RightVector*x2 + cf.LookVector*z2, color or Color3.new(0,1,1))
-	end
-end
-
 --////////////////////////////////////////////////////
 -- Arrow & Ray
 --////////////////////////////////////////////////////
@@ -154,16 +122,12 @@ function Gizmo.drawArrow(from, to, color)
 	local lineEnd = to - dir.Unit * headSize
 
 	Gizmo.drawLine(from, lineEnd, color or Color3.new(1,1,1), 2)
-	Gizmo.drawLine(to, lineEnd + (dir.Unit * -headSize * 0.5) + (Camera.CFrame.RightVector * headSize * 0.3), color or Color3.new(1,1,1))
-	Gizmo.drawLine(to, lineEnd + (dir.Unit * -headSize * 0.5) - (Camera.CFrame.RightVector * headSize * 0.3), color or Color3.new(1,1,1))
-end
-
-function Gizmo.drawRay(from, direction, color)
-	Gizmo.drawArrow(from, from + direction, color)
+	Gizmo.drawLine(to, lineEnd + (Camera.CFrame.RightVector * headSize * 0.3), color or Color3.new(1,1,1))
+	Gizmo.drawLine(to, lineEnd - (Camera.CFrame.RightVector * headSize * 0.3), color or Color3.new(1,1,1))
 end
 
 --////////////////////////////////////////////////////
--- Tracer (screen bottom line)
+-- Tracer
 --////////////////////////////////////////////////////
 function Gizmo.drawTracer(pos, color)
 	local p2d, vis = to2D(pos)
@@ -173,32 +137,21 @@ function Gizmo.drawTracer(pos, color)
 	l.Thickness = 1.5
 	l.From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
 	l.To = p2d
-	l._used = true
-end
-
---////////////////////////////////////////////////////
--- Clear & Update
---////////////////////////////////////////////////////
-function Gizmo.clear()
-	for _, d in ipairs(active) do
-		d.Visible = false
-		table.insert(pool, d)
-	end
-	active = {}
 end
 
 --////////////////////////////////////////////////////
 -- Example Render Loop
 --////////////////////////////////////////////////////
 RunService.RenderStepped:Connect(function()
+	if not workspace.CurrentCamera then return end
 	Gizmo.beginFrame()
 
-	-- Example visualization
-	local cf = CFrame.new(Vector3.new(0, 5, 0))
+	-- 👇 Move your camera around to see this box and sphere near origin
+	local cf = CFrame.new(Vector3.new(0, 5, -10)) -- place in front of camera
 	Gizmo.drawBox(cf, Vector3.new(4, 4, 4), Color3.fromRGB(255, 255, 0))
-	Gizmo.drawSphere(cf, 2, Color3.fromRGB(255, 0, 255))
-	Gizmo.drawArrow(Vector3.new(0,5,0), Vector3.new(0,8,0), Color3.new(0,1,0))
-	Gizmo.drawText(Vector3.new(0,8,0), "Gizmo Active!", Color3.new(1,1,1))
+	Gizmo.drawArrow(Vector3.new(0, 5, -10), Vector3.new(0, 8, -10), Color3.new(0, 1, 0))
+	Gizmo.drawText(Vector3.new(0, 8, -10), "Gizmo Active!", Color3.new(1, 1, 1))
+	Gizmo.drawTracer(Vector3.new(0, 5, -10), Color3.new(1, 0, 0))
 
 	Gizmo.endFrame()
 end)

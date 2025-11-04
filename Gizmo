@@ -1,7 +1,7 @@
 -- Gizmo.lua (fixed)
 
 local RunService = game:GetService("RunService")
-local Camera = workspace:WaitForChild("CurrentCamera")
+local Camera = workspace.CurrentCamera
 
 local Gizmo = {}
 local active, pool = {}, {}

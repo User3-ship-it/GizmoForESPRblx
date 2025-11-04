@@ -1,328 +1,339 @@
--- gizmo.lua
--- Drawing API reimplementation of BradSharp's Gizmo module
-
-local gizmo = {}
+-- Gizmo (Synapse Drawing remake, no attribute dependency)
+-- Drop in executor and use like:
+-- local gizmo = loadstring(<this code>)()
+-- gizmo.drawLine(Vector3.new(0,5,0), Vector3.new(5,5,5))
 
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Camera = Workspace.CurrentCamera
+local Drawing = Drawing -- Synapse-provided Drawing API
 
--- CONFIG
+local gizmo = {}
+
+-- Config/defaults
 local POINT_SCALE = 5
-local DEFAULT_COLOR = Color3.fromRGB(0, 255, 0)
-local DEFAULT_THICKNESS = 2
-local DEFAULT_SCALE = 1
+local defaultColor = Color3.fromRGB(0, 170, 255)
+local defaultThickness = 2
+local defaultScale = 1
 
--- INTERNAL STATE
-local color = DEFAULT_COLOR
-local transparency = 0
-local thickness = DEFAULT_THICKNESS
-local globalScale = DEFAULT_SCALE
-local globalOrigin = CFrame.new()
+-- State
+local properties = {
+	Color3 = defaultColor,
+	Transparency = 0,
+}
+local thickness = defaultThickness
+local globalScale = defaultScale
+local globalOrigin = CFrame.new(0,0,0)
 
-local drawings = {}
-local free = {}
+-- Object pools
+local cache = {
+	Line = {},
+	Triangle = {},
+	Circle = {},
+	Text = {},
+	Square = {},
+}
+local activeDraws = {}
+local queue = {}
 
-local function newDrawing(typeName)
-    -- protected creation: if the executor doesn't support a type, return nil
-    local ok, obj = pcall(function() return Drawing.new(typeName) end)
-    if not ok or not obj then
-        return nil
-    end
-    -- set safe defaults
-    if obj.Visible ~= nil then obj.Visible = false end
-    if obj.Color ~= nil then obj.Color = color end
-    if obj.Transparency ~= nil then obj.Transparency = 1 - transparency end
-    if obj.Thickness ~= nil then obj.Thickness = thickness end
-    obj.__type = typeName
-    return obj
-end
-
-local function getDrawing(typeName)
-    -- try reuse
-    for i = #free, 1, -1 do
-        local d = free[i]
-        if d and d.__type == typeName then
-            table.remove(free, i)
-            return d
-        end
-    end
-    -- try create
-    return newDrawing(typeName)
-end
-
-local function releaseAll()
-	for _, d in ipairs(drawings) do
-		d.Visible = false
-		table.insert(free, d)
+-- helpers
+local function getDraw(typeName)
+	local pool = cache[typeName]
+	local obj = table.remove(pool)
+	if obj and obj.Remove then
+		obj.Visible = true
+		return obj
 	end
-	table.clear(drawings)
+	return Drawing.new(typeName)
 end
 
--- Projection helper
+local function releaseDraw(obj, typeName)
+	if not obj then return end
+	pcall(function()
+		obj.Visible = false
+		if obj.Remove then
+			table.insert(cache[typeName], obj)
+		end
+	end)
+end
+
 local function project(pos)
-	local v3, onScreen = Camera:WorldToViewportPoint(pos)
-	return Vector2.new(v3.X, v3.Y), onScreen and v3.Z > 0
+	if not Camera then Camera = Workspace.CurrentCamera end
+	local p, onScreen = Camera:WorldToViewportPoint(pos)
+	return Vector2.new(p.X, p.Y), (onScreen and p.Z > 0), p.Z
 end
 
--- Utility for drawing lines
-local function drawLine3D(a, b)
-	local p1, ok1 = project(a)
-	local p2, ok2 = project(b)
-	if not (ok1 and ok2) then return end
-	local line = getDrawing("Line")
-	line.From = p1
-	line.To = p2
-	line.Thickness = thickness
-	line.Color = color
-	line.Transparency = 1 - transparency
-	line.Visible = true
-	table.insert(drawings, line)
-end
-
-------------------------------------------------------------------------------------------------------------------------
--- Exports (same API as original)
-------------------------------------------------------------------------------------------------------------------------
-
-function gizmo.setColor(c)
-	if typeof(c) == "BrickColor" then
-		color = c.Color
-	elseif typeof(c) == "Color3" then
-		color = c
-	else
-		color = DEFAULT_COLOR
+local function applyStyle(draw, kind)
+	if not draw then return end
+	if kind == "Line" then
+		draw.Color = properties.Color3
+		draw.Transparency = 1 - (1 - properties.Transparency)
+		draw.Thickness = thickness * globalScale
+	elseif kind == "Triangle" then
+		draw.Filled = true
+		draw.Color = properties.Color3
+		draw.Transparency = 1 - (1 - properties.Transparency)
+	elseif kind == "Circle" then
+		draw.Color = properties.Color3
+		draw.Transparency = 1 - (1 - properties.Transparency)
+		draw.Thickness = thickness * globalScale
+	elseif kind == "Text" then
+		draw.Color = properties.Color3
+		draw.Transparency = 1 - (1 - properties.Transparency)
+	elseif kind == "Square" then
+		draw.Color = properties.Color3
+		draw.Transparency = 1 - (1 - properties.Transparency)
+		draw.Thickness = thickness * globalScale
 	end
 end
 
-function gizmo.setColor3(c)
-	color = c
+local function queuePrimitive(kind, args)
+	table.insert(queue, {kind=kind, args=args})
+end
+
+-- Public API
+function gizmo.setColor(color)
+	if typeof(color) == "Color3" then
+		properties.Color3 = color
+	elseif typeof(color) == "string" then
+		local hex = color:match("#?([A-Fa-f0-9]+)")
+		if hex and (#hex == 6) then
+			local r = tonumber(hex:sub(1,2),16)/255
+			local g = tonumber(hex:sub(3,4),16)/255
+			local b = tonumber(hex:sub(5,6),16)/255
+			properties.Color3 = Color3.new(r,g,b)
+		end
+	else
+		pcall(function()
+			properties.Color3 = BrickColor.new(color).Color
+		end)
+	end
+end
+
+function gizmo.setColor3(c3)
+	if typeof(c3) == "Color3" then properties.Color3 = c3 end
 end
 
 function gizmo.setOrigin(cf)
-	globalOrigin = cf
+	if typeof(cf) == "CFrame" then globalOrigin = cf end
 end
 
 function gizmo.setTransparency(t)
-	transparency = math.clamp(t or 0, 0, 1)
+	properties.Transparency = math.clamp(t or 0, 0, 1)
 end
-
-function gizmo.setLayer(_) end -- Not supported in Drawing
 
 function gizmo.setScale(s)
 	globalScale = s or 1
 end
 
 function gizmo.reset()
-	color = DEFAULT_COLOR
-	thickness = DEFAULT_THICKNESS
-	globalScale = DEFAULT_SCALE
-	globalOrigin = CFrame.new()
-	transparency = 0
-end
-
-------------------------------------------------------------------------------------------------------------------------
--- DRAW FUNCTIONS
-------------------------------------------------------------------------------------------------------------------------
-
-function gizmo.drawPoint(pos)
-	local p, ok = project(globalOrigin:PointToWorldSpace(pos))
-	if not ok then return end
-	local c = getDrawing("Circle")
-	c.Position = p
-	c.Radius = globalScale * thickness * POINT_SCALE
-	c.Filled = true
-	c.Color = color
-	c.Transparency = 1 - transparency
-	c.Visible = true
-	table.insert(drawings, c)
-end
-
-function gizmo.drawLine(from, to)
-	from = globalOrigin:PointToWorldSpace(from)
-	to = globalOrigin:PointToWorldSpace(to)
-	drawLine3D(from, to)
-end
-
-function gizmo.drawArrow(from, to)
-    from = globalOrigin:PointToWorldSpace(from)
-    to = globalOrigin:PointToWorldSpace(to)
-
-    -- draw main line (uses Line which is widely supported)
-    do
-        local p1, ok1 = project(from)
-        local p2, ok2 = project(to)
-        if ok1 and ok2 then
-            local line = getDrawing("Line")
-            if line then
-                line.From = p1
-                line.To = p2
-                if line.Thickness ~= nil then line.Thickness = thickness end
-                if line.Color ~= nil then line.Color = color end
-                if line.Transparency ~= nil then line.Transparency = 1 - transparency end
-                line.Visible = true
-                table.insert(drawings, line)
-            end
-        end
-    end
-
-    -- draw arrowhead (Triangle may not be available in all executors; guard it)
-    do
-        local p1, ok1 = project(from)
-        local p2, ok2 = project(to)
-        if not (ok1 and ok2) then return end
-
-        local dirVec = (p2 - p1)
-        if dirVec.Magnitude <= 0 then return end
-        local dir = dirVec.unit
-        local left = Vector2.new(-dir.Y, dir.X)
-        local size = math.min(16, dirVec.Magnitude * 0.2 + 8) * globalScale
-
-        local tri = getDrawing("Triangle")
-        if tri then
-            tri.PointA = p2
-            tri.PointB = p2 - dir * size + left * (size * 0.6)
-            tri.PointC = p2 - dir * size - left * (size * 0.6)
-            if tri.Filled ~= nil then tri.Filled = true end
-            if tri.Color ~= nil then tri.Color = color end
-            if tri.Transparency ~= nil then tri.Transparency = 1 - transparency end
-            tri.Visible = true
-            table.insert(drawings, tri)
-            return
-        end
-
-        -- fallback: draw a small V with two Lines if Triangle not available
-        local l1 = getDrawing("Line")
-        local l2 = getDrawing("Line")
-        if l1 and l2 then
-            l1.From = p2
-            l1.To = p2 - dir * size + left * (size * 0.6)
-            l2.From = p2
-            l2.To = p2 - dir * size - left * (size * 0.6)
-            if l1.Thickness ~= nil then l1.Thickness = thickness end
-            if l2.Thickness ~= nil then l2.Thickness = thickness end
-            if l1.Color ~= nil then l1.Color = color end
-            if l2.Color ~= nil then l2.Color = color end
-            if l1.Transparency ~= nil then l1.Transparency = 1 - transparency end
-            if l2.Transparency ~= nil then l2.Transparency = 1 - transparency end
-            l1.Visible = true
-            l2.Visible = true
-            table.insert(drawings, l1)
-            table.insert(drawings, l2)
-        end
-    end
-end
-
-
-function gizmo.drawRay(from, dir)
-	gizmo.drawArrow(from, from + dir)
-end
-
-function gizmo.drawBox(orientation, size)
-	local cf = globalOrigin * orientation
-	local sx, sy, sz = size.X / 2, size.Y / 2, size.Z / 2
-	local corners = {
-		Vector3.new( sx, sy, sz),
-		Vector3.new(-sx, sy, sz),
-		Vector3.new(-sx,-sy, sz),
-		Vector3.new( sx,-sy, sz),
-		Vector3.new( sx, sy,-sz),
-		Vector3.new(-sx, sy,-sz),
-		Vector3.new(-sx,-sy,-sz),
-		Vector3.new( sx,-sy,-sz)
-	}
-	for i, v in ipairs(corners) do
-		corners[i] = cf:PointToWorldSpace(v)
-	end
-	local edges = {
-		{1,2},{2,3},{3,4},{4,1},
-		{5,6},{6,7},{7,8},{8,5},
-		{1,5},{2,6},{3,7},{4,8}
-	}
-	for _, e in ipairs(edges) do
-		drawLine3D(corners[e[1]], corners[e[2]])
-	end
-end
-
-function gizmo.drawWireBox(orientation, size)
-	gizmo.drawBox(orientation, size)
-end
-
-function gizmo.drawSphere(cf, radius)
-	local center = globalOrigin * cf
-	local pos = center.Position
-	local p, ok = project(pos)
-	if not ok then return end
-	local offset = Camera.CFrame.RightVector * radius
-	local pr, okr = project(pos + offset)
-	if not okr then return end
-	local r = (p - pr).Magnitude
-	local circle = getDrawing("Circle")
-	circle.Position = p
-	circle.Radius = r
-	circle.NumSides = 32
-	circle.Color = color
-	circle.Thickness = thickness
-	circle.Filled = false
-	circle.Transparency = 1 - transparency
-	circle.Visible = true
-	table.insert(drawings, circle)
-end
-
-function gizmo.drawWireSphere(cf, radius)
-	local c = globalOrigin * cf
-	local pos = c.Position
-	local axes = {
-		CFrame.Angles(0,0,0),
-		CFrame.Angles(math.pi/2,0,0),
-		CFrame.Angles(0,math.pi/2,0)
-	}
-	for _, rot in ipairs(axes) do
-		local p, ok = project(pos)
-		local offset = (c * rot).RightVector * radius
-		local pr, okr = project(pos + offset)
-		if ok and okr then
-			local r = (p - pr).Magnitude
-			local circle = getDrawing("Circle")
-			circle.Position = p
-			circle.Radius = r
-			circle.NumSides = 64
-			circle.Color = color
-			circle.Thickness = thickness
-			circle.Filled = false
-			circle.Transparency = 1 - transparency
-			circle.Visible = true
-			table.insert(drawings, circle)
-		end
-	end
-end
-
-function gizmo.drawText(pos, text)
-	local p, ok = project(globalOrigin:PointToWorldSpace(pos))
-	if not ok then return end
-	local t = getDrawing("Text")
-	t.Text = tostring(text)
-	t.Size = 16
-	t.Center = true
-	t.Outline = true
-	t.Color = color
-	t.Transparency = 1 - transparency
-	t.Position = p
-	t.Visible = true
-	table.insert(drawings, t)
+	properties.Transparency = 0
+	thickness = defaultThickness
+	properties.Color3 = defaultColor
+	globalScale = defaultScale
+	globalOrigin = CFrame.new(0,0,0)
 end
 
 function gizmo.clear()
-	releaseAll()
+	for _,d in ipairs(activeDraws) do
+		if d._type then
+			releaseDraw(d, d._type)
+		else
+			pcall(function() d.Visible = false end)
+		end
+	end
+	activeDraws = {}
+	queue = {}
 end
 
-------------------------------------------------------------------------------------------------------------------------
--- RENDER LOOP
-------------------------------------------------------------------------------------------------------------------------
+-- Drawing primitives
+function gizmo.drawPoint(position)
+	if typeof(position) ~= "Vector3" then return end
+	queuePrimitive("point", {pos = position})
+end
 
-RunService.RenderStepped:Connect(function()
-	releaseAll()
-end)
+function gizmo.drawLine(a,b)
+	if typeof(a) ~= "Vector3" or typeof(b) ~= "Vector3" then return end
+	queuePrimitive("line", {a=a,b=b})
+end
 
-------------------------------------------------------------------------------------------------------------------------
+function gizmo.drawArrow(a,b)
+	if typeof(a) ~= "Vector3" or typeof(b) ~= "Vector3" then return end
+	queuePrimitive("arrow", {a=a,b=b})
+end
+
+function gizmo.drawRay(from,dir)
+	if typeof(from) ~= "Vector3" or typeof(dir) ~= "Vector3" then return end
+	gizmo.drawArrow(from, from + dir)
+end
+
+function gizmo.drawText(pos,text,...)
+	local safe = tostring(text)
+	if select("#", ...) > 0 then
+		safe = safe:format(...)
+	end
+	queuePrimitive("text", {pos=pos, text=safe})
+end
+
+function gizmo.drawSphere(cf, radius)
+	if typeof(cf) ~= "CFrame" or typeof(radius) ~= "number" then return end
+	queuePrimitive("sphere", {center=(globalOrigin * cf).Position, radius=radius})
+end
+
+function gizmo.drawWireSphere(cf, radius)
+	if typeof(cf) ~= "CFrame" or typeof(radius) ~= "number" then return end
+	queuePrimitive("wiresphere", {center=(globalOrigin * cf).Position, radius=radius})
+end
+
+function gizmo.drawBox(cf, size)
+	if typeof(cf) ~= "CFrame" or typeof(size) ~= "Vector3" then return end
+	local rel = globalOrigin * cf
+	local hx, hy, hz = size.X/2, size.Y/2, size.Z/2
+	local offsets = {
+		Vector3.new( hx,  hy,  hz),
+		Vector3.new( hx,  hy, -hz),
+		Vector3.new( hx, -hy,  hz),
+		Vector3.new( hx, -hy, -hz),
+		Vector3.new(-hx,  hy,  hz),
+		Vector3.new(-hx,  hy, -hz),
+		Vector3.new(-hx, -hy,  hz),
+		Vector3.new(-hx, -hy, -hz),
+	}
+	local corners = {}
+	for i,off in ipairs(offsets) do
+		corners[i] = (rel * CFrame.new(off)).Position
+	end
+	local edges = {
+		{1,2},{1,3},{1,5},
+		{8,7},{8,6},{8,4},
+		{2,4},{2,6},
+		{3,4},{3,7},
+		{5,6},{5,7},
+	}
+	for _,e in ipairs(edges) do
+		gizmo.drawLine(corners[e[1]], corners[e[2]])
+	end
+end
+
+function gizmo.drawWireBox(cf, size)
+	gizmo.drawBox(cf, size)
+end
+
+-- internal helper for arrow
+local function drawArrow2D(a2,b2)
+	local line = getDraw("Line")
+	line.From = a2
+	line.To = b2
+	applyStyle(line, "Line")
+	line._type = "Line"
+	table.insert(activeDraws, line)
+
+	local dir = (a2 - b2).Unit
+	local side = Vector2.new(-dir.Y, dir.X)
+	local headLen = math.clamp((a2 - b2).Magnitude * 0.15, 8, 30) * globalScale
+	local p1 = b2
+	local p2 = b2 + dir * headLen + side * (headLen * 0.6)
+	local p3 = b2 + dir * headLen - side * (headLen * 0.6)
+	local tri = getDraw("Triangle")
+	tri.PointA, tri.PointB, tri.PointC = p1,p2,p3
+	applyStyle(tri, "Triangle")
+	tri._type = "Triangle"
+	table.insert(activeDraws, tri)
+end
+
+-- render loop
+local function renderStep()
+	for _,d in ipairs(activeDraws) do
+		if d._type then
+			releaseDraw(d, d._type)
+		else
+			pcall(function() d.Visible = false end)
+		end
+	end
+	activeDraws = {}
+
+	for _,cmd in ipairs(queue) do
+		local k,a = cmd.kind,cmd.args
+		if k=="point" then
+			local s,on = project(a.pos)
+			if on then
+				local dot = getDraw("Circle")
+				dot.Position = s
+				dot.Radius = math.max(1, (globalScale * thickness * POINT_SCALE) / 2)
+				dot.Filled = true
+				applyStyle(dot,"Circle")
+				dot._type = "Circle"
+				table.insert(activeDraws,dot)
+			end
+		elseif k=="line" then
+			local sA,onA = project(a.a)
+			local sB,onB = project(a.b)
+			if onA and onB then
+				local line = getDraw("Line")
+				line.From = sA
+				line.To = sB
+				applyStyle(line,"Line")
+				line._type = "Line"
+				table.insert(activeDraws,line)
+			end
+		elseif k=="arrow" then
+			local sA,onA = project(a.a)
+			local sB,onB = project(a.b)
+			if onA and onB then drawArrow2D(sA,sB) end
+		elseif k=="text" then
+			local s,on = project(a.pos)
+			if on then
+				local t = getDraw("Text")
+				t.Position = s
+				t.Text = tostring(a.text)
+				t.Center = true
+				t.Size = 14 * globalScale
+				t.Font = Drawing.Fonts().Monospace or 3
+				t.Outline = true
+				t.OutlineColor = Color3.new(0,0,0)
+				applyStyle(t,"Text")
+				t._type = "Text"
+				table.insert(activeDraws,t)
+			end
+		elseif k=="sphere" then
+			local c=a.center
+			local right=(Camera.CFrame.RightVector)*a.radius
+			local sC,onC=project(c)
+			local sR,onR=project(c+right)
+			if onC and onR then
+				local circ=getDraw("Circle")
+				circ.Position=sC
+				circ.Radius=(sR-sC).Magnitude
+				circ.Filled=false
+				circ.NumSides=32
+				applyStyle(circ,"Circle")
+				circ._type="Circle"
+				table.insert(activeDraws,circ)
+			end
+		elseif k=="wiresphere" then
+			local c=a.center
+			local r=a.radius
+			local axes={Camera.CFrame.RightVector,Camera.CFrame.UpVector,Camera.CFrame.LookVector}
+			for _,ax in ipairs(axes) do
+				local sC,onC=project(c)
+				local sR,onR=project(c+ax*r)
+				if onC and onR then
+					local circ=getDraw("Circle")
+					circ.Position=sC
+					circ.Radius=(sR-sC).Magnitude
+					circ.Filled=false
+					circ.NumSides=32
+					applyStyle(circ,"Circle")
+					circ._type="Circle"
+					table.insert(activeDraws,circ)
+				end
+			end
+		end
+	end
+
+	queue = {}
+end
+
+RunService.RenderStepped:Connect(renderStep)
 
 return gizmo

@@ -24,24 +24,31 @@ local drawings = {}
 local free = {}
 
 local function newDrawing(typeName)
-	local obj = Drawing.new(typeName)
-	obj.Visible = false
-	obj.Color = color
-	obj.Transparency = 1 - transparency
-	obj.ZIndex = 1
-	if typeName == "Line" then obj.Thickness = thickness end
-	obj.__type = typeName
-	return obj
+    -- protected creation: if the executor doesn't support a type, return nil
+    local ok, obj = pcall(function() return Drawing.new(typeName) end)
+    if not ok or not obj then
+        return nil
+    end
+    -- set safe defaults
+    if obj.Visible ~= nil then obj.Visible = false end
+    if obj.Color ~= nil then obj.Color = color end
+    if obj.Transparency ~= nil then obj.Transparency = 1 - transparency end
+    if obj.Thickness ~= nil then obj.Thickness = thickness end
+    obj.__type = typeName
+    return obj
 end
 
 local function getDrawing(typeName)
-	for i, d in ipairs(free) do
-		if d.__type == typeName then
-			table.remove(free, i)
-			return d
-		end
-	end
-	return newDrawing(typeName)
+    -- try reuse
+    for i = #free, 1, -1 do
+        local d = free[i]
+        if d and d.__type == typeName then
+            table.remove(free, i)
+            return d
+        end
+    end
+    -- try create
+    return newDrawing(typeName)
 end
 
 local function releaseAll()
@@ -137,27 +144,74 @@ function gizmo.drawLine(from, to)
 end
 
 function gizmo.drawArrow(from, to)
-	from = globalOrigin:PointToWorldSpace(from)
-	to = globalOrigin:PointToWorldSpace(to)
-	drawLine3D(from, to)
+    from = globalOrigin:PointToWorldSpace(from)
+    to = globalOrigin:PointToWorldSpace(to)
 
-	local p1, ok1 = project(from)
-	local p2, ok2 = project(to)
-	if not (ok1 and ok2) then return end
+    -- draw main line (uses Line which is widely supported)
+    do
+        local p1, ok1 = project(from)
+        local p2, ok2 = project(to)
+        if ok1 and ok2 then
+            local line = getDrawing("Line")
+            if line then
+                line.From = p1
+                line.To = p2
+                if line.Thickness ~= nil then line.Thickness = thickness end
+                if line.Color ~= nil then line.Color = color end
+                if line.Transparency ~= nil then line.Transparency = 1 - transparency end
+                line.Visible = true
+                table.insert(drawings, line)
+            end
+        end
+    end
 
-	local dir = (p2 - p1).unit
-	local left = Vector2.new(-dir.Y, dir.X)
-	local size = 6 * globalScale
-	local tri = getDrawing("Triangle")
-	tri.PointA = p2
-	tri.PointB = p2 - dir * size + left * (size * 0.6)
-	tri.PointC = p2 - dir * size - left * (size * 0.6)
-	tri.Color = color
-	tri.Filled = true
-	tri.Transparency = 1 - transparency
-	tri.Visible = true
-	table.insert(drawings, tri)
+    -- draw arrowhead (Triangle may not be available in all executors; guard it)
+    do
+        local p1, ok1 = project(from)
+        local p2, ok2 = project(to)
+        if not (ok1 and ok2) then return end
+
+        local dirVec = (p2 - p1)
+        if dirVec.Magnitude <= 0 then return end
+        local dir = dirVec.unit
+        local left = Vector2.new(-dir.Y, dir.X)
+        local size = math.min(16, dirVec.Magnitude * 0.2 + 8) * globalScale
+
+        local tri = getDrawing("Triangle")
+        if tri then
+            tri.PointA = p2
+            tri.PointB = p2 - dir * size + left * (size * 0.6)
+            tri.PointC = p2 - dir * size - left * (size * 0.6)
+            if tri.Filled ~= nil then tri.Filled = true end
+            if tri.Color ~= nil then tri.Color = color end
+            if tri.Transparency ~= nil then tri.Transparency = 1 - transparency end
+            tri.Visible = true
+            table.insert(drawings, tri)
+            return
+        end
+
+        -- fallback: draw a small V with two Lines if Triangle not available
+        local l1 = getDrawing("Line")
+        local l2 = getDrawing("Line")
+        if l1 and l2 then
+            l1.From = p2
+            l1.To = p2 - dir * size + left * (size * 0.6)
+            l2.From = p2
+            l2.To = p2 - dir * size - left * (size * 0.6)
+            if l1.Thickness ~= nil then l1.Thickness = thickness end
+            if l2.Thickness ~= nil then l2.Thickness = thickness end
+            if l1.Color ~= nil then l1.Color = color end
+            if l2.Color ~= nil then l2.Color = color end
+            if l1.Transparency ~= nil then l1.Transparency = 1 - transparency end
+            if l2.Transparency ~= nil then l2.Transparency = 1 - transparency end
+            l1.Visible = true
+            l2.Visible = true
+            table.insert(drawings, l1)
+            table.insert(drawings, l2)
+        end
+    end
 end
+
 
 function gizmo.drawRay(from, dir)
 	gizmo.drawArrow(from, from + dir)

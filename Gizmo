@@ -22,8 +22,11 @@ local RunService = game:GetService("RunService")
 local Event = RunService:IsServer() and RunService.Heartbeat or RunService.RenderStepped
 local Gizmos = Instance.new("Folder", workspace)
 
-local thickness = 0.025
-local globalScale = 1
+gizmo.DefThickness = 0.025
+gizmo.GlobScale = 1
+
+local thickness = gizmo.DefThickness
+local globalScale = gizmo.GlobScale
 local globalOrigin = CFrame.new(0, 0, 0)
 local onRender = nil
 local cache = {}

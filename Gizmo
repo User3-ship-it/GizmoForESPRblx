@@ -20,7 +20,7 @@ local POINT_SCALE = 5
 
 local RunService = game:GetService("RunService")
 local Event = RunService:IsServer() and RunService.Heartbeat or RunService.RenderStepped
-local Gizmos = Instance.new("Folder", workspace)
+local Gizmos = Instance.new("Folder", game.Players.LocalPlayer.PlayerGui)
 
 gizmo.DefThickness = 0.025
 gizmo.GlobScale = 1

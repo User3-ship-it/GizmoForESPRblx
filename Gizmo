@@ -1,5 +1,4 @@
--- Gizmo.lua (fixed)
-
+--// Gizmo.lua (Synapse Drawing version, fixed + extended)
 local RunService = game:GetService("RunService")
 local Camera = workspace.CurrentCamera
 
@@ -7,7 +6,7 @@ local Gizmo = {}
 local active, pool = {}, {}
 
 --////////////////////////////////////////////////////
--- Internal: Drawing reuse system
+-- Internal Drawing Object Reuse
 --////////////////////////////////////////////////////
 local function getDrawing(type)
 	local obj
@@ -41,14 +40,12 @@ function Gizmo.endFrame()
 end
 
 --////////////////////////////////////////////////////
--- Core Utilities
+-- Utility
 --////////////////////////////////////////////////////
 local function to2D(pos)
 	local v, onScreen = Camera:WorldToViewportPoint(pos)
-	if not onScreen or v.Z < 0 then
-		return nil, false
-	end
-	return Vector2.new(v.X, v.Y), true
+	if v.Z < 0.1 then return nil, false end
+	return Vector2.new(v.X, v.Y), onScreen
 end
 
 --////////////////////////////////////////////////////
@@ -59,7 +56,7 @@ function Gizmo.drawPoint(pos, color, size)
 	if not vis then return end
 	local c = getDrawing("Circle")
 	c.Color = color or Color3.new(1, 0, 0)
-	c.Radius = size or 4
+	c.Radius = size or 5
 	c.Filled = true
 	c.Position = p2d
 end
@@ -87,7 +84,7 @@ function Gizmo.drawText(pos, text, color, size)
 end
 
 --////////////////////////////////////////////////////
--- Box (3D)
+-- 3D Box
 --////////////////////////////////////////////////////
 function Gizmo.drawBox(cf, size, color)
 	local sx, sy, sz = size.X/2, size.Y/2, size.Z/2
@@ -107,23 +104,35 @@ function Gizmo.drawBox(cf, size, color)
 		{1,5},{2,6},{3,7},{4,8},
 	}
 	for _, e in ipairs(edges) do
-		Gizmo.drawLine(corners[e[1]], corners[e[2]], color or Color3.new(1,1,0))
+		Gizmo.drawLine(corners[e[1]], corners[e[2]], color or Color3.fromRGB(255,255,0))
 	end
 end
 
 --////////////////////////////////////////////////////
--- Arrow & Ray
+-- Arrow / Ray
 --////////////////////////////////////////////////////
 function Gizmo.drawArrow(from, to, color)
-	local dir = (to - from)
+	local dir = to - from
 	local mag = dir.Magnitude
 	if mag < 0.001 then return end
 	local headSize = mag * 0.1
 	local lineEnd = to - dir.Unit * headSize
 
 	Gizmo.drawLine(from, lineEnd, color or Color3.new(1,1,1), 2)
-	Gizmo.drawLine(to, lineEnd + (Camera.CFrame.RightVector * headSize * 0.3), color or Color3.new(1,1,1))
-	Gizmo.drawLine(to, lineEnd - (Camera.CFrame.RightVector * headSize * 0.3), color or Color3.new(1,1,1))
+
+	-- Arrow head (camera-facing)
+	local camRight = Camera.CFrame.RightVector
+	local camUp = Camera.CFrame.UpVector
+	local headWidth = headSize * 0.3
+	local head1 = to + (camRight * headWidth)
+	local head2 = to - (camRight * headWidth)
+	local head3 = to + (camUp * headWidth)
+	local head4 = to - (camUp * headWidth)
+
+	Gizmo.drawLine(to, head1, color)
+	Gizmo.drawLine(to, head2, color)
+	Gizmo.drawLine(to, head3, color)
+	Gizmo.drawLine(to, head4, color)
 end
 
 --////////////////////////////////////////////////////
@@ -140,20 +149,22 @@ function Gizmo.drawTracer(pos, color)
 end
 
 --////////////////////////////////////////////////////
--- Example Render Loop
+-- Example Live Preview
 --////////////////////////////////////////////////////
 RunService.RenderStepped:Connect(function()
 	if not workspace.CurrentCamera then return end
 	Gizmo.beginFrame()
 
-	-- 👇 Move your camera around to see this box and sphere near origin
-	local cf = CFrame.new(Vector3.new(0, 5, -10)) -- place in front of camera
+	local basePos = Camera.CFrame.Position + Camera.CFrame.LookVector * 15
+	local cf = CFrame.new(basePos)
+
 	Gizmo.drawBox(cf, Vector3.new(4, 4, 4), Color3.fromRGB(255, 255, 0))
-	Gizmo.drawArrow(Vector3.new(0, 5, -10), Vector3.new(0, 8, -10), Color3.new(0, 1, 0))
-	Gizmo.drawText(Vector3.new(0, 8, -10), "Gizmo Active!", Color3.new(1, 1, 1))
-	Gizmo.drawTracer(Vector3.new(0, 5, -10), Color3.new(1, 0, 0))
+	Gizmo.drawArrow(basePos, basePos + Vector3.new(0, 5, 0), Color3.new(0,1,0))
+	Gizmo.drawText(basePos + Vector3.new(0, 5.5, 0), "Gizmo Active", Color3.new(1,1,1))
+	Gizmo.drawTracer(basePos, Color3.new(1,0,0))
 
 	Gizmo.endFrame()
 end)
 
 return Gizmo
+
